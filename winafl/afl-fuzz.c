@@ -120,6 +120,7 @@ static u8  skip_deterministic,        /* Skip deterministic stages?       */
            drioless = 0,              /* Running without DRIO?            */
            drattach = 0;	            /* attaching to a running process   */
            use_intelpt = 0;           /* Running without DRIO?            */
+           use_trace32 = 1;
            custom_dll_defined = 0;    /* Custom DLL path defined?         */
            persist_dr_cache = 0;      /* Enable persisting code caches?   */
            expert_mode = 0;           /* Running in expert mode with DRIO?*/
@@ -2831,6 +2832,12 @@ static u8 run_target(char** argv, u32 timeout) {
 #ifdef INTELPT
 	if (use_intelpt) {
 		return run_target_pt(argv, timeout);
+	}
+#endif
+
+#ifdef TRACE32
+	if (use_trace32) {
+		return run_target_t32(argv, timeout);
 	}
 #endif
 
@@ -7445,13 +7452,61 @@ static void check_if_tty(void) {
 static void check_term_size(void) {
   //not implemented on Windows
 }
+#include <windows.h>
+#include <dbghelp.h>
+#include <stdio.h>
+
+#if _MSC_VER
+#define snprintf _snprintf
+#endif
+
+#define STACK_INFO_LEN  1024
+void ShowTraceStack(char* szBriefInfo)
+{
+    static const int MAX_STACK_FRAMES = 12;
+    void *pStack[12];
+    static char szStackInfo[STACK_INFO_LEN * 12];
+    static char szFrameInfo[STACK_INFO_LEN];
+
+    HANDLE process = GetCurrentProcess();
+    SymInitialize(process, NULL, TRUE);
+    WORD frames = CaptureStackBackTrace(0, MAX_STACK_FRAMES, pStack, NULL);
+    strcpy(szStackInfo, szBriefInfo == NULL ? "stack traceback:\n" : szBriefInfo);
+
+    for (WORD i = 0; i < frames; ++i) {
+        DWORD64 address = (DWORD64)(pStack[i]);
+
+        DWORD64 displacementSym = 0;
+        char buffer[sizeof(SYMBOL_INFO)+2000 * sizeof(TCHAR)];
+        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
+        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        pSymbol->MaxNameLen = MAX_SYM_NAME;
+
+        DWORD displacementLine = 0;
+        IMAGEHLP_LINE64 line;
+        line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+
+        if (SymFromAddr(process, address, &displacementSym, pSymbol) && 
+        	SymGetLineFromAddr64(process, address, &displacementLine, &line))
+        {
+            snprintf(szFrameInfo, sizeof(szFrameInfo), "\t%s() at %s:%d(0x%x)\n", 
+            	pSymbol->Name, line.FileName, line.LineNumber, pSymbol->Address);
+        }
+        else
+        {
+            snprintf(szFrameInfo, sizeof(szFrameInfo), "\terror: %d\n", GetLastError());
+        }
+        strcat(szStackInfo, szFrameInfo);
+    }
+
+    printf("%s", szStackInfo); // 
+}
 
 
 
 /* Display usage hints. */
 
 static void usage(u8* argv0) {
-
   SAYF("\n%s [ afl options ] -- [instrumentation options] -- "
 	   "\\path\\to\\fuzzed_app [ ... ]\n\n"
 
@@ -8430,7 +8485,7 @@ int main(int argc, char** argv) {
 
     }
 
-  if (!in_dir || !out_dir || !timeout_given || (!drioless && !dynamorio_dir && !use_intelpt)) usage(argv[0]);
+  if (!in_dir || !out_dir || !timeout_given || (!drioless && !dynamorio_dir && !use_intelpt && !use_trace32)) usage(argv[0]);
 
   if (!winafl_dll_path) {
     winafl_dll_path = "winafl.dll";
@@ -8451,9 +8506,20 @@ int main(int argc, char** argv) {
 	  if (!pt_options) usage(argv[0]);
 	  optind += pt_options;
 #endif
-  } else {
+  }else if(use_trace32){
+#ifdef TRACE32
+    int pt_options = winaflt32_options_init(argc - optind, argv + optind);
+	  //if (!pt_options) usage(argv[0]);
+	    optind += pt_options;
+#endif
+  }
+  else {
 	  extract_client_params(argc, argv);
   }
+
+
+
+
   optind++;
   
   if (!strcmp(in_dir, out_dir))

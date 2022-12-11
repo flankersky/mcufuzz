@@ -12,6 +12,10 @@ if (${INTELPT})
     add_definitions(-DINTELPT)
 endif()
 
+if (${TRACE32})
+    add_definitions(-DTRACE32)
+endif()
+
 if (${INTELPT})
   add_subdirectory(third_party/processor-trace)
 endif()
@@ -96,6 +100,7 @@ if (${INTELPT})
 
   SET(PT_ADDITIONAL_SOURCES
     winaflpt.c
+    winaflt32.c
     ptdecode.c
     third_party/processor-trace/libipt/src/pt_cpu.c
     third_party/processor-trace/libipt/src/windows/pt_cpuid.c
@@ -128,10 +133,20 @@ if (${INTELPT})
 
 endif()
 
+if (${TRACE32})
+  SET(T32_ADDITIONAL_SOURCES
+  winaflt32.c
+  )
+
+  SET(AFL_FUZZ_SOURCES ${AFL_FUZZ_SOURCES} ${T32_ADDITIONAL_SOURCES})
+endif()
+
+
+
 add_executable(afl-fuzz
   ${AFL_FUZZ_SOURCES}
   )
-
+  target_link_libraries(afl-fuzz "Dbghelp.lib")
 if (${INTELPT})
 
   target_link_libraries(afl-fuzz winipt)
